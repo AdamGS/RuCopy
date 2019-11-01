@@ -8,11 +8,12 @@ use rayon::prelude::*;
 use rusoto_core::credential::ChainProvider;
 use rusoto_core::{HttpClient, Region};
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
-use std::fs::File;
+use std::fs::{File, create_dir_all};
 use std::io::Write;
 use std::str::FromStr;
 
-fn main() {
+
+fn main() -> std::io::Result<()>{
     let args = App::new("Rucopy")
         .version("0.0.1")
         .about("Trying to make high-performance cp from s3 in Rust.")
@@ -36,10 +37,10 @@ fn main() {
                 .short("e")
                 .takes_value(true)
                 .required(false)
-                .help("Your s3 endpoint"),
+                .help("Your s3 endpoint (for use when proxy or non-aws s3 implementation are used)"),
         )
         .arg(
-            Arg::with_name("REMOTE_PATH")
+            Arg::with_name("PREFIX")
                 .default_value("/")
                 .required(false)
                 .short("p")
@@ -49,7 +50,15 @@ fn main() {
             Arg::with_name("LOCAL_PATH")
                 .default_value("./")
                 .short("l")
+                .takes_value(true)
                 .help("Local target path, created if does not exist."),
+        )
+        .arg(
+            Arg::with_name("DELIMITER")
+                .default_value("/")
+                .short("d")
+                .takes_value(true)
+                .help("Delimiter to group keys by in s3"),
         )
         .get_matches();
 
@@ -74,7 +83,10 @@ fn main() {
 
     let s3client = S3Client::new_with(HttpClient::new().unwrap(), provider, region);
 
-    let list_objects: ListObjectsV2Request = Default::default();
+    let list_objects: ListObjectsV2Request = ListObjectsV2Request {
+        prefix: Some(args.value_of("PREFIX").unwrap_or("/").to_owned()),
+        ..Default::default()
+    };
     let s3objects = match s3client.list_objects_v2(list_objects).sync() {
         Ok(output) => output.contents,
         Err(err) => {
@@ -97,12 +109,20 @@ fn main() {
 
         let local_path = args.value_of("LOCAL_PATH").unwrap();
 
+        std::fs::create_dir_all(local_path);
+
+        let x: Vec<&str> = o.key.as_ref().unwrap().split_terminator('/').collect();
+
+        let filename = x.last().unwrap();
+
         let mut file = File::create(format!(
             "{}/{}",
             local_path,
-            o.key.as_ref().unwrap().to_string()
+            filename
         ))
         .expect("Failed to create file");
         file.write_all(&body).expect("Failed to write to file");
     });
+
+    Ok(())
 }
