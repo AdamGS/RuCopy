@@ -8,12 +8,11 @@ use rayon::prelude::*;
 use rusoto_core::credential::ChainProvider;
 use rusoto_core::{HttpClient, Region};
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
-use std::fs::{File, create_dir_all};
+use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::str::FromStr;
 
-
-fn main() -> std::io::Result<()>{
+fn main() -> std::io::Result<()> {
     let args = App::new("Rucopy")
         .version("0.0.1")
         .about("Trying to make high-performance cp from s3 in Rust.")
@@ -37,7 +36,9 @@ fn main() -> std::io::Result<()>{
                 .short("e")
                 .takes_value(true)
                 .required(false)
-                .help("Your s3 endpoint (for use when proxy or non-aws s3 implementation are used)"),
+                .help(
+                    "Your s3 endpoint (for use when proxy or non-aws s3 implementation are used)",
+                ),
         )
         .arg(
             Arg::with_name("PREFIX")
@@ -70,17 +71,16 @@ fn main() -> std::io::Result<()>{
             let endpoint_arg = args
                 .value_of("S3_ENDPOINT")
                 .expect("s3endpoint must be specified for non-aws region");
-            let bucket = args.value_of("BUCKET").unwrap_or("test");
+            let bucket_arg = args.value_of("BUCKET").unwrap_or("test");
 
             Region::Custom {
                 name: region_arg.to_owned(),
-                endpoint: format!("{}/{}", endpoint_arg.to_owned(), bucket),
+                endpoint: format!("{}/{}", endpoint_arg.to_owned(), bucket_arg),
             }
         }
     };
 
     let provider = ChainProvider::new();
-
     let s3client = S3Client::new_with(HttpClient::new().unwrap(), provider, region);
 
     let list_objects: ListObjectsV2Request = ListObjectsV2Request {
@@ -109,8 +109,8 @@ fn main() -> std::io::Result<()>{
 
         let local_path = args.value_of("LOCAL_PATH").unwrap();
 
-        match std::fs::create_dir_all(local_path) {
-          Ok(()) => {},
+        match create_dir_all(local_path) {
+            Ok(()) => {}
             Err(_) => panic!("Couldn't create local path: {}", local_path),
         };
 
@@ -118,12 +118,8 @@ fn main() -> std::io::Result<()>{
 
         let filename = x.last().unwrap();
 
-        let mut file = File::create(format!(
-            "{}/{}",
-            local_path,
-            filename
-        ))
-        .expect("Failed to create file");
+        let mut file =
+            File::create(format!("{}/{}", local_path, filename)).expect("Failed to create file");
         file.write_all(&body).expect("Failed to write to file");
     });
 
