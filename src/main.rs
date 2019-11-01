@@ -109,7 +109,10 @@ fn main() -> std::io::Result<()>{
 
         let local_path = args.value_of("LOCAL_PATH").unwrap();
 
-        std::fs::create_dir_all(local_path);
+        match std::fs::create_dir_all(local_path) {
+          Ok(()) => {},
+            Err(_) => panic!("Couldn't create local path: {}", local_path),
+        };
 
         let x: Vec<&str> = o.key.as_ref().unwrap().split_terminator('/').collect();
 
