@@ -11,6 +11,7 @@ use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, Object, S3Client, S3};
 use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::str::FromStr;
+use threadpool::ThreadPool;
 use xmltree::Element;
 
 use crossbeam::channel::{bounded, unbounded, Receiver};
@@ -23,6 +24,7 @@ const ENDPOINT: &str = "ENDPOINT";
 const PREFIX: &str = "PREFIX";
 const LOCAL_PATH: &str = "LOCAL_PATH";
 const DELIMITER: &str = "DELIMITER";
+const NUM_OF_WORKERS: usize = 4;
 
 fn main() -> std::io::Result<()> {
     let args = App::new("RuCopy")
@@ -132,12 +134,18 @@ fn download_with_channels(
             return Ok(());
         }
     }
-        .unwrap();
+    .unwrap();
 
-    let r2: Receiver<Object> = r.clone();
 
-    thread::spawn(move || {
-        while !r2.is_empty() {
+
+    let pool = ThreadPool::new(NUM_OF_WORKERS);
+
+    for _ in 0..NUM_OF_WORKERS {
+        pool.execute(move || loop {
+            let r2: Receiver<Object> = r.clone();
+            let provider = ChainProvider::new();
+            let region = Region::from(region);
+            let s3client = S3Client::new_with(HttpClient::new().unwrap(), provider, region);
             let x = r2.recv();
             println!("Recived!");
             match x {
@@ -175,15 +183,17 @@ fn download_with_channels(
                     file.write_all(&body).expect("Failed to write to file");
                     println!("Finished writing file!");
                 }
-                Err(_) => {}
+                _ => break,
             }
-        }
-    });
+        });
+    }
 
     for o in s3objects {
         println!("Sent!");
         s.send(o).unwrap();
     }
+
+    pool.join();
 
     Ok(())
 }
