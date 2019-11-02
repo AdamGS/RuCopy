@@ -13,7 +13,7 @@ use std::io::Write;
 use std::str::FromStr;
 
 fn main() -> std::io::Result<()> {
-    let args = App::new("Rucopy")
+    let args = App::new("RuCopy")
         .version("0.0.1")
         .about("Trying to make high-performance cp from s3 in Rust.")
         .arg(
@@ -63,8 +63,13 @@ fn main() -> std::io::Result<()> {
         )
         .get_matches();
 
-    let region_arg = args.value_of("REGION").unwrap();
+    let local_path = args.value_of("LOCAL_PATH").unwrap();
+    match create_dir_all(local_path) {
+        Ok(()) => {}
+        Err(_) => panic!("Couldn't create local path: {}", local_path),
+    };
 
+    let region_arg = args.value_of("REGION").unwrap();
     let region = match Region::from_str(region_arg) {
         Ok(region) => region,
         Err(_) => {
@@ -80,11 +85,21 @@ fn main() -> std::io::Result<()> {
         }
     };
 
+    let some_prefix = Some(args.value_of("PREFIX").unwrap().to_owned());
+
+    download_bucket_with_prefix(region, local_path.to_string(), some_prefix)
+}
+
+fn download_bucket_with_prefix(
+    region: Region,
+    local_path: String,
+    prefix: Option<String>,
+) -> std::io::Result<()> {
     let provider = ChainProvider::new();
     let s3client = S3Client::new_with(HttpClient::new().unwrap(), provider, region);
 
     let list_objects: ListObjectsV2Request = ListObjectsV2Request {
-        prefix: Some(args.value_of("PREFIX").unwrap_or("/").to_owned()),
+        prefix,
         ..Default::default()
     };
     let s3objects = match s3client.list_objects_v2(list_objects).sync() {
@@ -104,19 +119,11 @@ fn main() -> std::io::Result<()> {
             .sync()
             .expect("Error GETting object");
 
+        let path_parts: Vec<&str> = o.key.as_ref().unwrap().split_terminator('/').collect();
+        let filename = path_parts.last().unwrap();
+
         let stream = result.body.unwrap();
         let body = stream.concat2().wait().unwrap();
-
-        let local_path = args.value_of("LOCAL_PATH").unwrap();
-
-        match create_dir_all(local_path) {
-            Ok(()) => {}
-            Err(_) => panic!("Couldn't create local path: {}", local_path),
-        };
-
-        let x: Vec<&str> = o.key.as_ref().unwrap().split_terminator('/').collect();
-
-        let filename = x.last().unwrap();
 
         let mut file =
             File::create(format!("{}/{}", local_path, filename)).expect("Failed to create file");
