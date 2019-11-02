@@ -64,10 +64,8 @@ fn main() -> std::io::Result<()> {
         .get_matches();
 
     let local_path = args.value_of("LOCAL_PATH").unwrap();
-    match create_dir_all(local_path) {
-        Ok(()) => {}
-        Err(_) => panic!("Couldn't create local path: {}", local_path),
-    };
+    create_dir_all(local_path)
+        .unwrap_or_else(|_| panic!("Failed to create new directory: {}", local_path));
 
     let region_arg = args.value_of("REGION").unwrap();
     let region = match Region::from_str(region_arg) {
