@@ -8,9 +8,11 @@ use rayon::prelude::*;
 use rusoto_core::credential::ChainProvider;
 use rusoto_core::{HttpClient, Region};
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
-use std::fs::{create_dir_all, File};
+use std::fs::create_dir_all;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::str::FromStr;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 const BUCKET: &str = "BUCKET";
 const REGION: &str = "REGION";
@@ -21,7 +23,7 @@ const DELIMITER: &str = "DELIMITER";
 
 fn main() -> std::io::Result<()> {
     let args = App::new("RuCopy")
-        .version("0.0.1")
+        .version("0.1.0")
         .about("Trying to make high-performance cp from s3 in Rust.")
         .arg(
             Arg::with_name(BUCKET)
@@ -120,6 +122,12 @@ fn download_bucket_with_prefix(
         Err(err) => panic!("Error: {:?}", err),
     };
 
+    let m = MultiProgress::new();
+
+    let style = ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+        .progress_chars("#>-");
+
     s3objects
         .expect("shit just got real")
         .par_iter()
@@ -141,12 +149,30 @@ fn download_bucket_with_prefix(
             let filename = path_parts.last().unwrap();
 
             let stream = result.body.unwrap();
-            let body = stream.concat2().wait().unwrap();
 
-            let mut file = File::create(format!("{}/{}", local_path, filename))
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(format!("{}/{}", local_path, filename))
                 .expect("Failed to create file");
-            file.write_all(&body).expect("Failed to write to file");
+
+            let mut downloaded: u64 = 0;
+            let pb = m.add(ProgressBar::new(result.content_length.unwrap() as u64));
+            pb.set_style(style.clone());
+
+            stream
+                .for_each(|b| {
+                    let length = file.write(&b).unwrap();
+                    downloaded += length as u64;
+                    pb.set_position(downloaded);
+                    Ok(())
+                })
+                .wait()
+                .unwrap_or_else(|_| panic!("Failed to download file: {}", filename));
         });
+
+    m.join().unwrap();
+    println!("All done!");
 
     Ok(())
 }
