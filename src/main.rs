@@ -12,7 +12,6 @@ use std::fs::create_dir_all;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::str::FromStr;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 const BUCKET: &str = "BUCKET";
 const REGION: &str = "REGION";
@@ -122,14 +121,8 @@ fn download_bucket_with_prefix(
         Err(err) => panic!("Error: {:?}", err),
     };
 
-    let m = MultiProgress::new();
-
-    let style = ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .progress_chars("#>-");
-
     s3objects
-        .expect("shit just got real")
+        .expect("Return empty results, exiting!")
         .par_iter()
         .for_each(|o| {
             if o.size.unwrap() == 0 {
@@ -143,7 +136,7 @@ fn download_bucket_with_prefix(
                     ..Default::default()
                 })
                 .sync()
-                .expect("Error GETting object");
+                .expect("Error Getting object from remote storage endpoint");
 
             let path_parts: Vec<&str> = o.key.as_ref().unwrap().split_terminator('/').collect();
             let filename = path_parts.last().unwrap();
@@ -156,23 +149,20 @@ fn download_bucket_with_prefix(
                 .open(format!("{}/{}", local_path, filename))
                 .expect("Failed to create file");
 
-            let mut downloaded: u64 = 0;
-            let pb = m.add(ProgressBar::new(result.content_length.unwrap() as u64));
-            pb.set_style(style.clone());
+            println!("Now downloading: {}", filename);
 
             stream
                 .for_each(|b| {
-                    let length = file.write(&b).unwrap();
-                    downloaded += length as u64;
-                    pb.set_position(downloaded);
+                    file.write_all(&b).unwrap();
                     Ok(())
                 })
                 .wait()
                 .unwrap_or_else(|_| panic!("Failed to download file: {}", filename));
+
+            println!("{} - Done!", filename);
         });
 
-    m.join().unwrap();
-    println!("All done!");
+    println!("All Done!");
 
     Ok(())
 }
