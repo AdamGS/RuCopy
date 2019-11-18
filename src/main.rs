@@ -13,6 +13,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::str::FromStr;
 
+use tokio::prelude::*;
+
 const BUCKET: &str = "BUCKET";
 const REGION: &str = "REGION";
 const ENDPOINT: &str = "ENDPOINT";
@@ -151,13 +153,15 @@ fn download_bucket_with_prefix(
 
             println!("Now downloading: {}", filename);
 
-            stream
-                .for_each(|b| {
-                    file.write_all(&b).unwrap();
-                    Ok(())
-                })
-                .wait()
-                .unwrap_or_else(|_| panic!("Failed to download file: {}", filename));
+            let futures = stream.chunks(8).for_each(move |b| {
+                for c in b.iter() {
+                    file.write_all(c.as_ref()).unwrap();
+                }
+                Ok(())
+            });
+            //
+            let mut runtime = tokio::runtime::Runtime::new().expect("Unable to start runtime!");
+            runtime.block_on(futures).unwrap();
 
             println!("{} - Done!", filename);
         });
