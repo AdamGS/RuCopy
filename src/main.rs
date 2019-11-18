@@ -153,10 +153,13 @@ fn download_bucket_with_prefix(
 
             println!("Now downloading: {}", filename);
 
-            let futures = stream.chunks(8).for_each(move |b| {
+            let futures = stream.chunks(16).for_each(move |b| {
+                let mut master_vec: Vec<u8> = Vec::with_capacity(4*10^6);
                 for c in b.iter() {
-                    file.write_all(c.as_ref()).unwrap();
+                    master_vec.append(&mut c.to_vec());
                 }
+
+                file.write_all(master_vec.as_ref()).unwrap();
                 Ok(())
             });
             //
