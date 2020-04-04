@@ -1,19 +1,18 @@
-extern crate futures;
+#![feature(async_closure)]
+
 extern crate rusoto_core;
 extern crate rusoto_s3;
 
 use clap::{App, Arg};
-use futures::{Future, Stream};
 use rayon::prelude::*;
 use rusoto_core::credential::ChainProvider;
-use rusoto_core::{HttpClient, Region};
-use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
+use rusoto_core::{HttpClient, HttpConfig, Region};
+use rusoto_s3::{Bucket, GetObjectRequest, ListObjectsV2Request, Object, S3Client, S3};
+use std::borrow::Borrow;
 use std::fs::create_dir_all;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufWriter, Error, Read, Write};
 use std::str::FromStr;
-
-use tokio::prelude::*;
 
 const BUCKET: &str = "BUCKET";
 const REGION: &str = "REGION";
@@ -22,7 +21,8 @@ const PREFIX: &str = "PREFIX";
 const LOCAL_PATH: &str = "LOCAL_PATH";
 const DELIMITER: &str = "DELIMITER";
 
-fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() {
     let args = App::new("RuCopy")
         .version("0.1.0")
         .about("Trying to make high-performance cp from s3 in Rust.")
@@ -38,7 +38,7 @@ fn main() -> std::io::Result<()> {
                 .short("r")
                 .takes_value(true)
                 .required(false)
-                //.default_value("eu-central-1")
+                .default_value("eu-central-1")
                 .help("Specify AWS region"),
         )
         .arg(
@@ -95,81 +95,101 @@ fn main() -> std::io::Result<()> {
 
     let some_prefix = Some(args.value_of(PREFIX).unwrap().to_owned());
 
-    download_bucket_with_prefix(
-        region,
-        bucket_arg.to_string(),
-        local_path.to_string(),
-        some_prefix,
-    )
-}
-
-fn download_bucket_with_prefix(
-    region: Region,
-    bucket: String,
-    local_path: String,
-    prefix: Option<String>,
-) -> std::io::Result<()> {
     let provider = ChainProvider::new();
-    let s3client = S3Client::new_with(HttpClient::new().unwrap(), provider, region);
+    let mut http_provider_config = HttpConfig::new();
+    http_provider_config.read_buf_size(1024 * 1024 * 4); // Set buffer size to 4MB
+    let s3client = S3Client::new_with(
+        HttpClient::new_with_config(http_provider_config).unwrap(),
+        provider,
+        region,
+    );
 
     let list_objects: ListObjectsV2Request = ListObjectsV2Request {
-        prefix,
-        bucket: bucket.clone(),
+        prefix: some_prefix,
+        bucket: bucket_arg.to_string(),
         ..Default::default()
     };
 
-    let s3objects = match s3client.list_objects_v2(list_objects).sync() {
+    let s3objects = match s3client.list_objects_v2(list_objects).await {
         Ok(objects) => objects.contents,
         Err(err) => panic!("Error: {:?}", err),
     };
 
-    s3objects
-        .expect("Return empty results, exiting!")
-        .par_iter()
-        .for_each(|o| {
+    let object_iter = s3objects.expect("Got empty results, exiting!");
+    println!("Downloading!");
+    //for o in  object_iter.iter() {
+    while let Some(o) = object_iter.iter().next() {
+        tokio::spawn(async move  {
             if o.size.unwrap() == 0 {
-                return;
+                let path_parts: Vec<&str> = o.key.as_ref().unwrap().split_terminator('/').collect();
+                let filename = path_parts.last().unwrap();
+                println!("File {} length is 0! doing nothing", filename);
+            } else {
+                let mut result = s3client
+                    .get_object(GetObjectRequest {
+                        bucket: bucket_arg.to_string(),
+                        key: o.key.as_ref().unwrap().to_string(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                //.expect("Error Getting object from remote storage endpoint");
+
+                let path_parts: Vec<&str> = o.key.as_ref().unwrap().split_terminator('/').collect();
+                let filename = path_parts.last().unwrap();
+                println!("Filename: {}", filename);
+
+                let mut stream = result.body.unwrap();
+                let mut file = BufWriter::new(
+                    OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .open(format!("{}/{}", local_path, filename))
+                        .expect("Failed to create file"),
+                );
+
+                tokio::task::spawn_blocking(|| {
+                    std::io::copy(&mut stream.into_blocking_read(), &mut file).unwrap();
+                    file.flush();
+                });
+
+
             }
-
-            let result = s3client
-                .get_object(GetObjectRequest {
-                    bucket: bucket.clone(),
-                    key: o.key.as_ref().unwrap().to_string(),
-                    ..Default::default()
-                })
-                .sync()
-                .expect("Error Getting object from remote storage endpoint");
-
-            let path_parts: Vec<&str> = o.key.as_ref().unwrap().split_terminator('/').collect();
-            let filename = path_parts.last().unwrap();
-
-            let stream = result.body.unwrap();
-
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(format!("{}/{}", local_path, filename))
-                .expect("Failed to create file");
-
-            println!("Now downloading: {}", filename);
-
-            let futures = stream.chunks(16).for_each(move |b| {
-                let mut master_vec: Vec<u8> = Vec::with_capacity(4*10^6);
-                for c in b.iter() {
-                    master_vec.append(&mut c.to_vec());
-                }
-
-                file.write_all(master_vec.as_ref()).unwrap();
-                Ok(())
-            });
-            //
-            let mut runtime = tokio::runtime::Runtime::new().expect("Unable to start runtime!");
-            runtime.block_on(futures).unwrap();
-
-            println!("{} - Done!", filename);
         });
+        //});
+    }
 
-    println!("All Done!");
-
-    Ok(())
+    // download_bucket_with_prefix(
+    //     region,
+    //     bucket_arg.to_string(),
+    //     local_path.to_string(),
+    //     some_prefix,
+    // );
 }
+
+// async fn download_bucket_with_prefix(
+//     region: Region,
+//     bucket: String,
+//     local_path: String,
+//     prefix: Option<String>,
+// ) -> std::io::Result<()> {
+//
+//
+//     Ok(())
+// }
+
+// let futures = stream.for_each(move |b| {
+//     println!("Filename: {}, chunk_size: {}", filename, b.len());
+//     for chunk in b.iter() {
+//         file.write_all(chunk).unwrap();
+//     }
+//     file.flush().unwrap();
+// });
+//
+// let mut runtime = tokio::runtime::Runtime::new().expect("Unable to start runtime!");
+// runtime.block_on(futures).unwrap();
+
+//file.flush().unwrap();
+//file.get_mut().flush();
+
+//println!("{} - Done!", filename);

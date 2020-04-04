@@ -7,9 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-futures = "0.1"
-rusoto_core = "0.41.0"
-rusoto_s3 = "0.41.0"
+rusoto_core = "0.43.0"
+rusoto_s3 = "0.43.0"
 clap = "2.33.0"
-rayon="1.2.0"
-tokio="0.1.21"
+tokio = { version = "0.2.16", features = ["full"] }
+rayon = "1.3"
