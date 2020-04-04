@@ -6,11 +6,11 @@ use clap::{App, Arg};
 use futures::{Future, Stream};
 use rayon::prelude::*;
 use rusoto_core::credential::ChainProvider;
-use rusoto_core::{HttpClient, Region};
+use rusoto_core::{HttpClient, HttpConfig, Region};
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use std::fs::create_dir_all;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::str::FromStr;
 
 const BUCKET: &str = "BUCKET";
@@ -107,8 +107,14 @@ fn download_bucket_with_prefix(
     local_path: String,
     prefix: Option<String>,
 ) -> std::io::Result<()> {
-    let provider = ChainProvider::new();
-    let s3client = S3Client::new_with(HttpClient::new().unwrap(), provider, region);
+    let mut http_provider_config = HttpConfig::new();
+    http_provider_config.read_buf_size(1024 * 1024 * 4); // Set buffer size to 4MB
+    let credentials_provider = ChainProvider::new();
+    let s3client = S3Client::new_with(
+        HttpClient::new_with_config(http_provider_config).unwrap(),
+        credentials_provider,
+        region,
+    );
 
     let list_objects: ListObjectsV2Request = ListObjectsV2Request {
         prefix,
@@ -143,21 +149,26 @@ fn download_bucket_with_prefix(
 
             let stream = result.body.unwrap();
 
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(format!("{}/{}", local_path, filename))
-                .expect("Failed to create file");
+            let mut file_buffer = BufWriter::with_capacity(
+                o.size.unwrap() as usize,
+                OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .open(format!("{}/{}", local_path, filename))
+                    .expect("Failed to create file"),
+            );
 
             println!("Now downloading: {}", filename);
 
             stream
                 .for_each(|b| {
-                    file.write_all(&b).unwrap();
-                    Ok(())
+                    file_buffer.write_all(&b).unwrap();
+                    file_buffer.flush()
                 })
                 .wait()
                 .unwrap_or_else(|_| panic!("Failed to download file: {}", filename));
+
+            file_buffer.flush().unwrap();
 
             println!("{} - Done!", filename);
         });
