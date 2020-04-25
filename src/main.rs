@@ -12,6 +12,7 @@ use std::fs::create_dir_all;
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::str::FromStr;
+use sysfs_class::SysClass;
 
 const BUCKET: &str = "BUCKET";
 const REGION: &str = "REGION";
@@ -108,7 +109,25 @@ fn download_bucket_with_prefix(
     prefix: Option<String>,
 ) -> std::io::Result<()> {
     let mut http_provider_config = HttpConfig::new();
-    http_provider_config.read_buf_size(1024 * 1024 * 4); // Set buffer size to 4MB
+
+    let max_speed = sysfs_class::Net::iter()
+        .max_by(|i, u| {
+            i.as_ref()
+                .unwrap()
+                .speed()
+                .unwrap_or(0)
+                .cmp(&u.as_ref().unwrap().speed().unwrap_or(0))
+        })
+        .unwrap()
+        .unwrap()
+        .speed()
+        .unwrap();
+
+    http_provider_config.read_buf_size(if max_speed == 0 {
+        1024 * 1024 * 2
+    } else {
+        max_speed as usize
+    }); // Set buffer size to 4MB
     let credentials_provider = ChainProvider::new();
     let s3client = S3Client::new_with(
         HttpClient::new_with_config(http_provider_config).unwrap(),
